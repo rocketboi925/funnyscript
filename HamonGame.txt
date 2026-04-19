@@ -1,0 +1,2492 @@
+local repo = "https://raw.githubusercontent.com/mstudio45/LinoriaLib/main/"
+
+local Library = loadstring(game:HttpGet(repo .. "Library.lua"))()
+local ThemeManager = loadstring(game:HttpGet(repo .. "addons/ThemeManager.lua"))()
+local SaveManager = loadstring(game:HttpGet(repo .. "addons/SaveManager.lua"))()
+
+local Options = Library.Options
+local Toggles = Library.Toggles
+
+-- ========================
+-- SERVICES
+-- ========================
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UIS = game:GetService("UserInputService")
+local VIM = game:GetService("VirtualInputManager")
+local LocalPlayer = Players.LocalPlayer
+
+if game.Lighting:FindFirstChild("Storage") then
+    print("Storage Found")
+else
+local StorageFolder = Instance.new("Folder")
+StorageFolder.Name = "Storage"
+StorageFolder.Parent = game.Lighting
+end
+
+local PLATFORM_POSITION = Vector3.new(435.5050048828125, -103.73572540283203, 121.97632598876953)
+local function getOrCreatePlatform()
+    local existing = workspace:FindFirstChild("CottomPlate")
+    if existing then return existing end
+
+    local plate = Instance.new("Part")
+    plate.Name = "CottomPlate"
+    plate.Size = Vector3.new(300, 2, 300)
+    plate.CFrame = CFrame.new(PLATFORM_POSITION)
+    plate.Anchored = true
+    plate.CanCollide = true
+    plate.Locked = true
+    plate.Material = Enum.Material.SmoothPlastic
+    plate.BrickColor = BrickColor.new("Medium stone grey")
+    plate.Parent = workspace
+    return plate
+end
+getOrCreatePlatform()
+
+local Window = Library:CreateWindow({
+	Title = "Hamon Game",
+	Center = true,
+	AutoShow = true,
+	Resizable = true,
+	ShowCustomCursor = true,
+	UnlockMouseWhileOpen = true,
+	NotifySide = "Left",
+	TabPadding = 8,
+	MenuFadeTime = 0.2
+})
+
+local Tabs = {
+	Farm = Window:AddTab("Main"),
+	ESP = Window:AddTab("ESP"),
+	PlayerTarget = Window:AddTab("Players"),
+	Extras = Window:AddTab("Extras"),
+	["UI Settings"] = Window:AddTab("UI Settings"),
+}
+
+-- ========================
+-- FARM GROUP
+-- ========================
+local FarmGroup = Tabs.Farm:AddRightGroupbox("Farm")
+
+FarmGroup:AddToggle("FarmToggle", {
+	Text = "Farm",
+	Default = false,
+	Tooltip = "Enable/Disable item farming",
+})
+
+FarmGroup:AddDropdown("FarmItems", {
+	Values = {
+		"50 Lira Coin",
+		"500 Lira Coin",
+		"Random Cassette",
+		"Stone Mask",
+		"Gold Leaf",
+	},
+	Default = 1,
+	Multi = true,
+	Text = "Items Wanted",
+	Tooltip = "Select items to farm (top = highest priority)",
+})
+
+local ITEM_PRIORITY = {
+	"50 Lira Coin",
+	"500 Lira Coin",
+	"Random Cassette",
+	"Stone Mask",
+	"Gold Leaf",
+}
+
+local savedPosition = nil
+local farmRunning = false
+
+local function getCharacter()
+	local player = Players.LocalPlayer
+	return player.Character or player.CharacterAdded:Wait()
+end
+
+local function getHRP()
+	local char = getCharacter()
+	return char and char:FindFirstChild("HumanoidRootPart")
+end
+
+local function teleportTo(position)
+	local hrp = getHRP()
+	if hrp then
+		hrp.CFrame = CFrame.new(position + Vector3.new(0, 3, 0))
+	end
+end
+
+local function waitForPickup(toolName, timeout)
+	local player = Players.LocalPlayer
+	local t = tick()
+	while tick() - t < timeout do
+		for _, item in ipairs(player.Backpack:GetChildren()) do
+			if item.Name == toolName then return true end
+		end
+		local char = player.Character
+		if char then
+			for _, item in ipairs(char:GetChildren()) do
+				if item.Name == toolName then return true end
+			end
+		end
+		task.wait(0.1)
+	end
+	return false
+end
+
+local function getSelectedItemsByPriority()
+	local selected = Options.FarmItems.Value
+	local result = {}
+	for _, itemName in ipairs(ITEM_PRIORITY) do
+		if selected[itemName] then
+			table.insert(result, itemName)
+		end
+	end
+	return result
+end
+
+local function findItemsInWorkspace(priorityList)
+	local found = {}
+
+	local spawnedItems = workspace:FindFirstChild("ServerJunk") and workspace.ServerJunk:FindFirstChild("SpawnedItems")
+	if not spawnedItems then return found end
+
+	local priorityMap = {}
+	for i, name in ipairs(priorityList) do
+		priorityMap[name] = i
+	end
+
+	for _, item in ipairs(spawnedItems:GetChildren()) do
+		local p = priorityMap[item.Name]
+		if p then
+			table.insert(found, { priority = p, instance = item })
+		end
+	end
+
+	table.sort(found, function(a, b) return a.priority < b.priority end)
+
+	return found
+end
+
+task.spawn(function()
+	while task.wait(0.1) do
+		if not Toggles.FarmToggle.Value then
+			farmRunning = false
+			task.wait(0.5)
+		else
+			farmRunning = true
+
+			local priorityList = getSelectedItemsByPriority()
+			if #priorityList == 0 then task.wait(1) continue end
+
+			local items = findItemsInWorkspace(priorityList)
+
+			if #items == 0 then
+				if savedPosition then
+					local hrp = getHRP()
+					if hrp then
+						local distFromSaved = (hrp.CFrame.Position - savedPosition).Magnitude
+						if distFromSaved > 5 then
+							teleportTo(savedPosition)
+						end
+					end
+				end
+				task.wait(1)
+				continue
+			end
+
+			for _, entry in ipairs(items) do
+				if not Toggles.FarmToggle.Value then break end
+
+				local item = entry.instance
+				if not item or not item.Parent then continue end
+
+				local itemPos
+				if item:IsA("BasePart") then
+					itemPos = item.Position
+				elseif item.PrimaryPart then
+					itemPos = item.PrimaryPart.Position
+				else
+					local part = item:FindFirstChildWhichIsA("BasePart")
+					if part then itemPos = part.Position end
+				end
+
+				if not itemPos then continue end
+
+				teleportTo(itemPos)
+				waitForPickup(item.Name, 2)
+				task.wait(0.15)
+			end
+
+			task.wait(0.3)
+		end
+	end
+end)
+
+Toggles.FarmToggle:OnChanged(function()
+	if Toggles.FarmToggle.Value then
+		local hrp = getHRP()
+		if hrp then
+			savedPosition = hrp.CFrame.Position
+			Library:Notify("Farm started! Position saved.")
+		end
+	else
+		if savedPosition then
+			task.wait(0.2)
+			teleportTo(savedPosition)
+			Library:Notify("Farm stopped. Teleported back to saved position.")
+			savedPosition = nil
+		else
+			Library:Notify("Farm stopped.")
+		end
+	end
+end)
+
+-- ========================
+-- PLAYER FARM
+-- ========================
+FarmGroup:AddDivider()
+FarmGroup:AddLabel("— Player Farm —")
+
+FarmGroup:AddToggle("PlayerFarmMain", {
+    Text = "Main Account",
+    Default = false,
+    Tooltip = "Anchors main account at farm position and spams click",
+})
+
+FarmGroup:AddDropdown("MainFarmMode", {
+    Values = { "Regular", "Vampire Kills" },
+    Default = 1,
+    Multi = false,
+    Text = "Main Farm Mode",
+    Tooltip = "Regular = spam click | Vampire Kills = drain KO'd players",
+})
+
+-- Weapon dropdown (reads from backpack)
+local function getBackpackWeapons()
+    local names = {}
+    local p = Players.LocalPlayer
+    for _, tool in ipairs(p.Backpack:GetChildren()) do
+        if tool:IsA("Tool") then table.insert(names, tool.Name) end
+    end
+    local c = p.Character
+    if c then
+        for _, tool in ipairs(c:GetChildren()) do
+            if tool:IsA("Tool") then
+                local found = false
+                for _, n in ipairs(names) do if n == tool.Name then found = true break end end
+                if not found then table.insert(names, tool.Name) end
+            end
+        end
+    end
+    if #names == 0 then names = {"(No tools found)"} end
+    table.sort(names)
+    return names
+end
+
+local weaponList = getBackpackWeapons()
+
+local playerFarmWeaponDropdown = FarmGroup:AddDropdown("PlayerFarmWeapon", {
+    Values = weaponList,
+    Default = 1,
+    Multi = false,
+    Text = "Weapon",
+    Tooltip = "Weapon to equip while farming",
+})
+
+FarmGroup:AddButton("Refresh Weapons", function()
+    local newList = getBackpackWeapons()
+    playerFarmWeaponDropdown:SetValues(newList)
+    Library:Notify("Weapon list refreshed (" .. #newList .. " found)")
+end)
+
+local holdGThread = nil
+
+FarmGroup:AddToggle('HoldGCharge', {
+    Text = 'Hold G / Charge',
+    Default = false,
+    Callback = function(Value)
+        if Value then
+            holdGThread = task.spawn(function()
+                while true do
+                    if not UIS:IsKeyDown(Enum.KeyCode.G) then
+                        VIM:SendKeyEvent(true, Enum.KeyCode.G, false, game)
+                    end
+                    task.wait(0.1)
+                end
+            end)
+        else
+            if holdGThread then
+                task.cancel(holdGThread)
+                holdGThread = nil
+            end
+            VIM:SendKeyEvent(false, Enum.KeyCode.G, false, game)
+        end
+    end
+})
+
+FarmGroup:AddDivider()
+
+FarmGroup:AddToggle("PlayerFarmAlt", {
+    Text = "Alt Account",
+    Default = false,
+    Tooltip = "Teleports YOU (alt) based on selected farm mode",
+})
+
+FarmGroup:AddDropdown("AltFarmMode", {
+    Values = { "Regular", "Hamon Kills" },
+    Default = 1,
+    Multi = false,
+    Text = "Alt Farm Mode",
+    Tooltip = "Regular = die in front of main | Hamon Kills = use Stone Mask",
+})
+
+FarmGroup:AddInput("AltUsername", {
+    Text = "Main Username",
+    Default = "",
+    Tooltip = "Username of the main account to follow (used by alt toggle)",
+    Placeholder = "Enter main username...",
+})
+
+
+local FARM_POSITION = PLATFORM_POSITION + Vector3.new(0, 4, 0)
+
+local playerFarmConnection = nil
+local altFarmConnection = nil
+local altFarmThread = nil
+
+local lastClickTime = 0
+local CLICK_DELAY = 0.15
+
+local lastAltClickTime = 0
+local ALT_CLICK_DELAY = 2
+
+-- ========================
+-- HELPERS
+-- ========================
+local function hasMaskInInventory()
+    local p = Players.LocalPlayer
+    for _, tool in ipairs(p.Backpack:GetChildren()) do
+        if tool.Name == "Stone Mask" then return true end
+    end
+    local char = p.Character
+    if char then
+        for _, tool in ipairs(char:GetChildren()) do
+            if tool:IsA("Tool") and tool.Name == "Stone Mask" then return true end
+        end
+    end
+    return false
+end
+
+local function hasMaskEquipped()
+    local char = Players.LocalPlayer.Character
+    if not char then return false end
+    local tool = char:FindFirstChildOfClass("Tool")
+    return tool and tool.Name == "Stone Mask"
+end
+
+local function findMaskInWorkspace()
+    local spawnedItems = workspace:FindFirstChild("ServerJunk") and workspace.ServerJunk:FindFirstChild("SpawnedItems")
+    if not spawnedItems then return nil end
+    for _, item in ipairs(spawnedItems:GetChildren()) do
+        if item.Name == "Stone Mask" then return item end
+    end
+    return nil
+end
+
+local function getMaskPosition(item)
+    if not item or not item.Parent then return nil end
+    local handle = item:FindFirstChild("Handle")
+    if handle and handle:IsA("BasePart") then return handle.Position end
+    if item:IsA("BasePart") then return item.Position end
+    if item.PrimaryPart then return item.PrimaryPart.Position end
+    local part = item:FindFirstChildWhichIsA("BasePart")
+    if part then return part.Position end
+    return nil
+end
+
+local function getSafeHRP()
+    -- Never yields — safe to call inside pickup loops
+    local char = Players.LocalPlayer.Character
+    if not char then return nil end
+    return char:FindFirstChild("HumanoidRootPart")
+end
+
+
+
+local function equipTool(toolName)
+    local p = Players.LocalPlayer
+    local char = p.Character
+    if not char then return false end
+    local already = char:FindFirstChildOfClass("Tool")
+    if already and already.Name == toolName then return true end
+    local tool = p.Backpack:FindFirstChild(toolName)
+    if tool then
+        local hum = char:FindFirstChildOfClass("Humanoid")
+        if hum then hum:EquipTool(tool) return true end
+    end
+    return false
+end
+
+local function doClick()
+    VIM:SendMouseButtonEvent(200, 200, 0, true, game, 1)
+    VIM:SendMouseButtonEvent(200, 200, 0, false, game, 1)
+end
+
+local function isVampire()
+    local data = game.Players.LocalPlayer:FindFirstChild("Data")
+    if not data then return false end
+    local unlocked = data:FindFirstChild("Unlocked")
+    if not unlocked then return false end
+    local val = unlocked:FindFirstChild("Vampire")
+    local returnvalue = val.Value
+    if returnvalue == "true" then
+    return true
+    elseif returnvalue == "false" then
+        return false
+    end
+end
+
+-- ========================
+-- MAIN ACCOUNT LOGIC (unchanged)
+-- ========================
+Toggles.PlayerFarmMain:OnChanged(function()
+    if Toggles.PlayerFarmMain.Value then
+        local char = Players.LocalPlayer.Character
+        local hrp = char and char:FindFirstChild("HumanoidRootPart")
+        if not hrp then
+            Library:Notify("No character found!")
+            return
+        end
+
+        playerFarmConnection = RunService.Heartbeat:Connect(function()
+            if not Toggles.PlayerFarmMain.Value then return end
+
+            local p = Players.LocalPlayer
+            local c = p.Character
+            if not c then return end
+
+            local h = c:FindFirstChild("HumanoidRootPart")
+            if h then
+                h.CFrame = CFrame.new(FARM_POSITION)
+            end
+
+               local mode = Options.MainFarmMode.Value
+
+
+
+            if mode == "Vampire Kills" then
+
+                -- Check for KO'd player within 3 studs
+
+                local koTarget = nil
+
+                local aliveFolder = workspace:FindFirstChild("Alive")
+
+                if aliveFolder and h then
+
+                    for _, playerFolder in ipairs(aliveFolder:GetChildren()) do
+
+                        local status = playerFolder:FindFirstChild("Status")
+
+                        if status then
+
+                           local ko = status:FindFirstChild("KO")
+
+if ko then
+
+                                local targetHRP = playerFolder:FindFirstChildWhichIsA("BasePart")
+
+                                    or (playerFolder.PrimaryPart)
+
+                                -- Try to find their HRP more specifically
+
+                                local found = playerFolder:FindFirstChild("HumanoidRootPart")
+
+                                if found then
+
+                                    local dist = (found.Position - h.Position).Magnitude
+
+                                    if dist <= 3 then
+
+                                        koTarget = playerFolder
+
+                                        break
+
+                                    end
+
+                                end
+
+                            end
+
+                        end
+
+                    end
+
+                end
+
+
+
+                if koTarget then
+
+                    -- Prefer Absorption, fall back to Drain
+
+                    local preferredTool = p.Backpack:FindFirstChild("Absorption") or p.Backpack:FindFirstChild("Drain")
+
+                    local preferredName = preferredTool and preferredTool.Name or "Drain"
+
+                    local equipped = c:FindFirstChildOfClass("Tool")
+
+
+
+                    if not equipped or equipped.Name ~= preferredName then
+
+                        -- Not equipped yet, equip it first and wait
+
+                        if preferredTool then
+
+                            local hum = c:FindFirstChildOfClass("Humanoid")
+
+                            if hum then hum:EquipTool(preferredTool) end
+
+                        end
+
+                        return
+
+                    end
+
+
+
+                    -- Tool is equipped, click every heartbeat
+
+                    VIM:SendMouseButtonEvent(200, 200, 0, true, game, 1)
+
+                    task.wait(0.1)
+
+                    VIM:SendMouseButtonEvent(200, 200, 0, false, game, 1)
+
+                    task.wait(CLICK_DELAY)
+
+                else
+
+                    -- No KO target nearby: use selected weapon and punch normally
+
+                    local selectedWeapon = Options.PlayerFarmWeapon.Value
+
+                    if not selectedWeapon or selectedWeapon == "(No tools found)" then return end
+
+
+
+                    local equipped = c:FindFirstChildOfClass("Tool")
+
+                    if not equipped or equipped.Name ~= selectedWeapon then
+
+                        local tool = p.Backpack:FindFirstChild(selectedWeapon)
+
+                        if tool then
+
+                            local hum = c:FindFirstChildOfClass("Humanoid")
+
+                            if hum then hum:EquipTool(tool) end
+
+                        end
+
+                        return
+
+                    end
+
+
+
+                    local now = tick()
+
+                    if now - lastClickTime >= CLICK_DELAY then
+
+                        lastClickTime = now
+
+                        doClick()
+
+                    end
+
+                end
+
+
+
+
+            else
+                -- Regular mode: equip selected weapon and spam click
+                local selectedWeapon = Options.PlayerFarmWeapon.Value
+                if not selectedWeapon or selectedWeapon == "(No tools found)" then return end
+
+                local equipped = c:FindFirstChildOfClass("Tool")
+                if not equipped or equipped.Name ~= selectedWeapon then
+                    local tool = p.Backpack:FindFirstChild(selectedWeapon)
+                    if tool then
+                        local hum = c:FindFirstChildOfClass("Humanoid")
+                        if hum then hum:EquipTool(tool) end
+                    end
+                    return
+                end
+
+                local now = tick()
+                if now - lastClickTime >= CLICK_DELAY then
+                    lastClickTime = now
+                    doClick()
+                end
+            end
+        end)
+
+        Library:Notify("Player Farm started!")
+    else
+        if playerFarmConnection then
+            playerFarmConnection:Disconnect()
+            playerFarmConnection = nil
+        end
+        Library:Notify("Player Farm stopped.")
+    end
+end)
+-- ========================
+-- ALT ACCOUNT LOGIC
+-- ========================
+local function stopAltFarm()
+    if altFarmConnection then
+        altFarmConnection:Disconnect()
+        altFarmConnection = nil
+    end
+    if altFarmThread then
+        task.cancel(altFarmThread)
+        altFarmThread = nil
+    end
+end
+
+Toggles.PlayerFarmAlt:OnChanged(function()
+    if Toggles.PlayerFarmAlt.Value then
+        local targetName = Options.AltUsername.Value
+        if not targetName or targetName == "" then
+            Library:Notify("Enter the main account's username first!")
+            Toggles.PlayerFarmAlt:SetValue(false)
+            return
+        end
+
+        local mode = Options.AltFarmMode.Value  -- ← fixed, was Options.PlayerFarmMode.Value
+
+        -- -----------------------------------------------
+        -- REGULAR MODE: just stay in front of main and die
+        -- -----------------------------------------------
+if mode == "Regular" then
+    altFarmConnection = RunService.Heartbeat:Connect(function()
+        if not Toggles.PlayerFarmAlt.Value then return end
+
+        -- Use fixed world position instead of relative to main's (possibly drifted) HRP
+        local ALT_STAND_POSITION = FARM_POSITION + Vector3.new(0, 0, -3)
+
+        local altChar = Players.LocalPlayer.Character
+        if altChar then
+            for _, part in ipairs(altChar:GetDescendants()) do
+                if part:IsA("BasePart") then part.CanCollide = false end
+            end
+        end
+
+        local hrp = getHRP()
+        if hrp then
+            hrp.CFrame = CFrame.new(ALT_STAND_POSITION)
+        end
+
+        local now = tick()
+        if now - lastAltClickTime >= ALT_CLICK_DELAY then
+            lastAltClickTime = now
+            doClick()
+        end
+    end)
+
+            Library:Notify("Alt farm started (Regular), following: " .. targetName)
+
+        -- -----------------------------------------------
+        -- HAMON KILLS MODE
+        -- -----------------------------------------------
+        elseif mode == "Hamon Kills" then
+            altFarmThread = task.spawn(function()
+                Library:Notify("Alt farm started (Hamon Kills), following: " .. targetName)
+
+                while Toggles.PlayerFarmAlt.Value do
+                    local target = Players:FindFirstChild(Options.AltUsername.Value)
+                    if not target or not target.Character then task.wait(0.5) continue end
+                    local targetHRP = target.Character:FindFirstChild("HumanoidRootPart")
+                    if not targetHRP then task.wait(0.5) continue end
+
+                    -- Noclip self
+                    local altChar = Players.LocalPlayer.Character
+                    if altChar then
+                        for _, part in ipairs(altChar:GetDescendants()) do
+                            if part:IsA("BasePart") then part.CanCollide = false end
+                        end
+                    end
+
+                    local hrp = getHRP()
+                    if not hrp then task.wait(0.1) continue end
+                    -- CASE 0: Already a vampire → go die in front of main
+if isVampire() then
+    print("vamp")
+    hrp.CFrame = targetHRP.CFrame * CFrame.new(0, 0, -6)
+    task.wait(0.1)
+    continue
+end
+                    -- CASE 1: Mask equipped in hand → go BEHIND main and spam click to use it
+                    if hasMaskEquipped() then
+                            print("vamp2")
+                        hrp.CFrame = targetHRP.CFrame * CFrame.new(0, 0, 6) -- behind main
+                        local now = tick()
+                        if now - lastClickTime >= CLICK_DELAY then
+                            lastClickTime = now
+                            doClick()
+                        end
+                        task.wait(0.05)
+                        continue
+                    end
+
+                    -- CASE 2: Mask in inventory (not equipped) → equip it
+                    if hasMaskInInventory() then
+                            print("vamp3")
+                        equipTool("Stone Mask")
+                        hrp.CFrame = targetHRP.CFrame * CFrame.new(0, 0, 6) -- behind while equipping
+                        task.wait(0.1)
+                        continue
+                    end
+
+                
+-- CASE 3: Mask spawned in world → go pick it up
+local maskInWorld = findMaskInWorkspace()
+if maskInWorld then
+    local pickupStart = tick()
+    while tick() - pickupStart < 15 do
+        if not Toggles.PlayerFarmAlt.Value then break end
+
+        -- Picked it up
+        if hasMaskInInventory() then
+            Library:Notify("Got the Stone Mask!")
+            break
+        end
+
+        -- Mask despawned or was grabbed by someone else
+        if not maskInWorld.Parent then
+            break
+        end
+
+        -- Noclip while chasing
+        local altChar = Players.LocalPlayer.Character
+        if altChar then
+            for _, part in ipairs(altChar:GetDescendants()) do
+                if part:IsA("BasePart") then part.CanCollide = false end
+            end
+        end
+
+        local pos = getMaskPosition(maskInWorld)
+        local h = getSafeHRP()  -- use safe version that never yields
+        if pos and h then
+            h.CFrame = CFrame.new(pos + Vector3.new(0, 2, 0))
+        end
+
+        task.wait(0.1)
+    end
+    continue
+end
+                
+                    -- CASE 4: No mask anywhere → go in front of main and die normally
+                    hrp.CFrame = targetHRP.CFrame * CFrame.new(0, 0, -3)
+
+                    local now = tick()
+                    if now - lastAltClickTime >= ALT_CLICK_DELAY then
+                        lastAltClickTime = now
+                        doClick()
+                    end
+                    task.wait(0.1)
+                end
+            end)
+
+        -- -----------------------------------------------
+        -- VAMPIRE KILLS MODE (placeholder)
+        -- -----------------------------------------------
+
+        end
+
+    else
+        stopAltFarm()
+        Library:Notify("Alt farm stopped.")
+    end
+end)
+
+-- ========================
+-- MAIN GROUP
+-- ========================
+local MainGroup = Tabs.Farm:AddLeftGroupbox("Main")
+
+MainGroup:AddToggle("AntiVampireBurn", {
+	Text = "Anti Vampire Burn",
+	Default = false,
+	Tooltip = "Blocks sun damage",
+})
+
+local shieldPart = nil
+local shieldConnection = nil
+
+Toggles.AntiVampireBurn:OnChanged(function()
+    if Toggles.AntiVampireBurn.Value then
+        if shieldPart then shieldPart:Destroy() shieldPart = nil end
+        if shieldConnection then shieldConnection:Disconnect() shieldConnection = nil end
+
+        local char = LocalPlayer.Character
+        local hrp = char and char:FindFirstChild("HumanoidRootPart")
+        if not hrp then return end
+
+        shieldPart = Instance.new("Part")
+        shieldPart.Name = "SunShield"
+        shieldPart.Size = Vector3.new(8, 0.1, 8)  -- flat wide roof
+        shieldPart.Anchored = true
+        shieldPart.CanCollide = false
+        shieldPart.CanQuery = true   -- MUST be true to block raycasts
+        shieldPart.Transparency = 1
+        shieldPart.CastShadow = false
+        shieldPart.Parent = char
+
+        shieldConnection = RunService.Heartbeat:Connect(function()
+            if not Toggles.AntiVampireBurn.Value then return end
+            local c = LocalPlayer.Character
+            local h = c and c:FindFirstChild("HumanoidRootPart")
+            if h and shieldPart and shieldPart.Parent then
+                shieldPart.CFrame = h.CFrame + Vector3.new(0, 4, 0)  -- above HRP
+            end
+        end)
+
+        Library:Notify("Sun shield enabled!")
+    else
+        if shieldConnection then shieldConnection:Disconnect() shieldConnection = nil end
+        if shieldPart then shieldPart:Destroy() shieldPart = nil end
+        Library:Notify("Sun shield disabled!")
+    end
+end)
+MainGroup:AddToggle("AntiFogToggle", {
+    Text = "Anti Fog/Atmosphere",
+    Default = false,
+    Tooltip = "Removes atmosphere/fog from lighting",
+})
+
+Toggles.AntiFogToggle:OnChanged(function()
+    local lighting = game:GetService("Lighting")
+    local storage = lighting:FindFirstChild("Storage")
+
+    if Toggles.AntiFogToggle.Value then
+        local atmosphere = lighting:FindFirstChildOfClass("Atmosphere")
+        if atmosphere then
+            atmosphere.Parent = storage
+            Library:Notify("Atmosphere removed!")
+        else
+            Library:Notify("No Atmosphere found in Lighting.")
+        end
+    else
+        local atmosphere = storage and storage:FindFirstChildOfClass("Atmosphere")
+        if atmosphere then
+            atmosphere.Parent = lighting
+            Library:Notify("Atmosphere restored!")
+        else
+            Library:Notify("No Atmosphere in storage to restore.")
+        end
+    end
+end)
+
+MainGroup:AddDivider()
+MainGroup:AddLabel("— Lagger —")
+
+local laggerThread = nil
+local destroyEffectsConnection = nil
+
+MainGroup:AddToggle("LaggerToggle", {
+    Text = "Dash Spammer Toggle",
+    Default = false,
+    Tooltip = "Spams the dash feature",
+})
+
+MainGroup:AddSlider("LaggerSpeed", {
+    Text = "Fire Rate",
+    Default = 0.01,
+    Min = 0.0000000000000001,
+    Max = 0.01,
+    Rounding = 5,
+    Suffix = "s",
+    Tooltip = "How fast to spam (lower = faster)",
+})
+
+MainGroup:AddToggle("DestroyEffectsToggle", {
+    Text = "Destroy Effects (Reduce Lag)",
+    Default = false,
+    Tooltip = "Destroys Dashing effects from HRP",
+})
+
+Toggles.LaggerToggle:OnChanged(function()
+    if Toggles.LaggerToggle.Value then
+        laggerThread = task.spawn(function()
+            while Toggles.LaggerToggle.Value do
+                pcall(function()
+                    game:GetService("ReplicatedStorage").Remotes.Dashed:FireServer()
+                    game:GetService("ReplicatedStorage").Remotes.Dashed:FireServer()
+                    game:GetService("ReplicatedStorage").Remotes.Dashed:FireServer()            
+                end)
+                task.wait(Options.LaggerSpeed.Value)
+            end
+        end)
+        Library:Notify("Lagger started!")
+    else
+        if laggerThread then
+            task.cancel(laggerThread)
+            laggerThread = nil
+        end
+        Library:Notify("Lagger stopped.")
+    end
+end)
+
+Toggles.DestroyEffectsToggle:OnChanged(function()
+    if Toggles.DestroyEffectsToggle.Value then
+        destroyEffectsConnection = RunService.Heartbeat:Connect(function()
+            local char = Players.LocalPlayer.Character
+            if not char then return end
+            local hrp = char:FindFirstChild("HumanoidRootPart")
+            if not hrp then return end
+            local dashing = hrp:FindFirstChild("Dashing")
+            if dashing then
+                dashing:Destroy()
+            end
+        end)
+        Library:Notify("Destroy Effects enabled!")
+    else
+        if destroyEffectsConnection then
+            destroyEffectsConnection:Disconnect()
+            destroyEffectsConnection = nil
+        end
+        Library:Notify("Destroy Effects disabled.")
+    end
+end)
+
+-- ========================
+-- CHAT LOGGER GUI
+-- ========================
+local chatLoggerGui = nil
+local chatLoggerLogging = true
+local chatLoggerPrevPos = 0
+local chatLoggerConnections = {}
+
+local function buildChatLoggerGui()
+    if chatLoggerGui then return end
+
+    local gui = Instance.new("ScreenGui")
+    gui.Name = "HamonChatLogger"
+    gui.ResetOnSpawn = false
+    gui.Parent = game.Players.LocalPlayer.PlayerGui
+
+    local frame = Instance.new("Frame")
+    frame.BackgroundColor3 = Color3.fromRGB(15, 15, 15)
+    frame.BorderSizePixel = 0
+    frame.Position = UDim2.new(0.03, 0, 0.6, 0)
+    frame.Size = UDim2.new(0, 420, 0, 220)
+    frame.Active = true
+    frame.Draggable = true
+    frame.Parent = gui
+
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 6)
+    corner.Parent = frame
+
+    local titleBar = Instance.new("Frame")
+    titleBar.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
+    titleBar.BorderSizePixel = 0
+    titleBar.Size = UDim2.new(1, 0, 0, 26)
+    titleBar.Parent = frame
+
+    local titleCorner = Instance.new("UICorner")
+    titleCorner.CornerRadius = UDim.new(0, 6)
+    titleCorner.Parent = titleBar
+
+    local titleLabel = Instance.new("TextLabel")
+    titleLabel.BackgroundTransparency = 1
+    titleLabel.Position = UDim2.new(0, 8, 0, 0)
+    titleLabel.Size = UDim2.new(1, -8, 1, 0)
+    titleLabel.Font = Enum.Font.GothamBold
+    titleLabel.Text = "Chat Logger"
+    titleLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+    titleLabel.TextSize = 13
+    titleLabel.TextXAlignment = Enum.TextXAlignment.Left
+    titleLabel.Parent = titleBar
+
+    local scroll = Instance.new("ScrollingFrame")
+    scroll.Name = "LogPanel"
+    scroll.BackgroundColor3 = Color3.fromRGB(15, 15, 15)
+    scroll.BorderSizePixel = 0
+    scroll.Position = UDim2.new(0, 0, 0, 28)
+    scroll.Size = UDim2.new(1, 0, 1, -28)
+    scroll.ScrollBarThickness = 4
+    scroll.ScrollBarImageColor3 = Color3.fromRGB(80, 80, 80)
+    scroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+    scroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+    scroll.Parent = frame
+
+    local listLayout = Instance.new("UIListLayout")
+    listLayout.Padding = UDim.new(0, 2)
+    listLayout.Parent = scroll
+
+    local padding = Instance.new("UIPadding")
+    padding.PaddingLeft = UDim.new(0, 6)
+    padding.PaddingRight = UDim.new(0, 6)
+    padding.PaddingTop = UDim.new(0, 4)
+    padding.Parent = scroll
+
+    chatLoggerGui = gui
+
+    -- Hook all current players
+    for _, plr in ipairs(game.Players:GetPlayers()) do
+        local conn = plr.Chatted:Connect(function(msg)
+            if not Toggles.ChatLoggerToggle or not Toggles.ChatLoggerToggle.Value then return end
+
+            local colour = Color3.fromRGB(220, 220, 220)
+            local prefix = string.sub(msg, 1, 1)
+            local prefix2 = string.sub(msg, 1, 2)
+            if prefix == ":" or prefix == ";" then
+                colour = Color3.fromRGB(255, 80, 80)
+            elseif prefix2 == "/w" or prefix2 == "/t" then
+                colour = Color3.fromRGB(80, 160, 255)
+            end
+
+            local label = Instance.new("TextLabel")
+            label.BackgroundTransparency = 1
+            label.Size = UDim2.new(1, -6, 0, 18)
+            label.Font = Enum.Font.GothamSemibold
+            label.Text = plr.Name .. ": " .. msg
+            label.TextColor3 = colour
+            label.TextSize = 13
+            label.TextXAlignment = Enum.TextXAlignment.Left
+            label.TextWrapped = true
+            label.AutomaticSize = Enum.AutomaticSize.Y
+            label.Parent = scroll
+
+            -- Auto scroll to bottom
+            task.defer(function()
+                scroll.CanvasPosition = Vector2.new(0, scroll.AbsoluteCanvasSize.Y)
+            end)
+        end)
+        table.insert(chatLoggerConnections, conn)
+    end
+
+    -- Hook players who join later
+    local joinConn = game.Players.ChildAdded:Connect(function(plr)
+        if not plr:IsA("Player") then return end
+        local conn = plr.Chatted:Connect(function(msg)
+            if not Toggles.ChatLoggerToggle or not Toggles.ChatLoggerToggle.Value then return end
+
+            local colour = Color3.fromRGB(220, 220, 220)
+            local prefix = string.sub(msg, 1, 1)
+            local prefix2 = string.sub(msg, 1, 2)
+            if prefix == ":" or prefix == ";" then
+                colour = Color3.fromRGB(255, 80, 80)
+            elseif prefix2 == "/w" or prefix2 == "/t" then
+                colour = Color3.fromRGB(80, 160, 255)
+            end
+
+            local label = Instance.new("TextLabel")
+            label.BackgroundTransparency = 1
+            label.Size = UDim2.new(1, -6, 0, 18)
+            label.Font = Enum.Font.GothamSemibold
+            label.Text = plr.Name .. ": " .. msg
+            label.TextColor3 = colour
+            label.TextSize = 13
+            label.TextXAlignment = Enum.TextXAlignment.Left
+            label.TextWrapped = true
+            label.AutomaticSize = Enum.AutomaticSize.Y
+            label.Parent = scroll
+
+            task.defer(function()
+                scroll.CanvasPosition = Vector2.new(0, scroll.AbsoluteCanvasSize.Y)
+            end)
+        end)
+        table.insert(chatLoggerConnections, conn)
+    end)
+    table.insert(chatLoggerConnections, joinConn)
+end
+
+MainGroup:AddDivider()
+
+MainGroup:AddToggle("ChatLoggerToggle", {
+    Text = "Chat Logger",
+    Default = false,
+    Tooltip = "Shows a chat log of all player messages",
+})
+
+Toggles.ChatLoggerToggle:OnChanged(function()
+    if Toggles.ChatLoggerToggle.Value then
+        buildChatLoggerGui()
+        if chatLoggerGui then
+            chatLoggerGui.Enabled = true
+        end
+        Library:Notify("Chat Logger enabled!")
+    else
+        if chatLoggerGui then
+            chatLoggerGui.Enabled = false
+        end
+        Library:Notify("Chat Logger hidden.")
+    end
+end)
+-- ========================
+-- MOVEMENT GROUP
+-- ========================
+local Movement = Tabs.Farm:AddLeftGroupbox("Movement")
+-- ========================
+-- FLY
+-- ========================
+local CFloop = nil
+CFspeed = 50
+
+Movement:AddToggle("FlyToggle", {
+	Text = "Fly",
+	Default = false,
+	Callback = function(v)
+		if v then
+			Players.LocalPlayer.Character:FindFirstChildOfClass('Humanoid').PlatformStand = true
+			local Head = Players.LocalPlayer.Character:WaitForChild("Head")
+			Head.Anchored = true
+			if CFloop then CFloop:Disconnect() end
+			CFloop = RunService.Heartbeat:Connect(function(deltaTime)
+				local moveDirection = Players.LocalPlayer.Character:FindFirstChildOfClass('Humanoid').MoveDirection * (CFspeed * deltaTime)
+				local headCFrame = Head.CFrame
+				local camera = workspace.CurrentCamera
+				local cameraCFrame = camera.CFrame
+				local cameraOffset = headCFrame:ToObjectSpace(cameraCFrame).Position
+				cameraCFrame = cameraCFrame * CFrame.new(-cameraOffset.X, -cameraOffset.Y, -cameraOffset.Z + 1)
+				local cameraPosition = cameraCFrame.Position
+				local headPosition = headCFrame.Position
+				local objectSpaceVelocity = CFrame.new(cameraPosition, Vector3.new(headPosition.X, cameraPosition.Y, headPosition.Z)):VectorToObjectSpace(moveDirection)
+				Head.CFrame = CFrame.new(headPosition) * (cameraCFrame - cameraPosition) * CFrame.new(objectSpaceVelocity)
+			end)
+		else
+			if CFloop then
+				CFloop:Disconnect()
+				CFloop = nil
+			end
+			local char = Players.LocalPlayer.Character
+			if char then
+				local hum = char:FindFirstChildOfClass('Humanoid')
+				local head = char:FindFirstChild("Head")
+				if hum then hum.PlatformStand = false end
+				if head then head.Anchored = false end
+			end
+		end
+	end
+}):AddKeyPicker("FlyKey", {
+	Default = "",
+	Mode = "Toggle",
+	SyncToggleState = true,
+	Text = "Fly",
+	Callback = function()
+		Toggles.FlyToggle:SetValue(not Toggles.FlyToggle.Value)
+	end
+})
+
+Movement:AddSlider("FlySpeed", {
+	Text = "Fly Speed",
+	Default = 50,
+	Min = 25,
+	Max = 150,
+	Rounding = 0,
+	Callback = function(v)
+		CFspeed = v
+	end
+})
+
+-- ========================
+-- NOCLIP
+-- ========================
+local NoclipState = {
+	connection = nil,
+}
+
+local function StartNoclip()
+	if NoclipState.connection then
+		NoclipState.connection:Disconnect()
+	end
+	NoclipState.connection = RunService.Stepped:Connect(function()
+		local char = LocalPlayer.Character
+		if not char then return end
+		for _, part in ipairs(char:GetDescendants()) do
+			if part:IsA("BasePart") then
+				part.CanCollide = false
+			end
+		end
+	end)
+end
+
+local function StopNoclip()
+	if NoclipState.connection then
+		NoclipState.connection:Disconnect()
+		NoclipState.connection = nil
+	end
+end
+
+Movement:AddToggle("NoclipToggle", {
+	Text = "Noclip",
+	Default = false,
+	Tooltip = "Walk through walls",
+	Callback = function(v)
+		if v then
+			StartNoclip()
+			Library:Notify("Noclip enabled!")
+		else
+			StopNoclip()
+			Library:Notify("Noclip disabled!")
+		end
+	end
+}):AddKeyPicker("NoclipKey", {
+	Default = "",
+	Mode = "Toggle",
+	SyncToggleState = true,
+	Text = "Noclip Bind",
+	Callback = function()
+		Toggles.NoclipToggle:SetValue(not Toggles.NoclipToggle.Value)
+	end
+})
+
+Movement:AddDivider()
+
+-- ========================
+-- NO SLOW / LEGIT NO STUN
+-- ========================
+local camera = workspace.CurrentCamera
+
+local NoSlowState = {
+	currentVelocity = Vector3.new(0, 0, 0),
+	wasSlowed = false,
+	connection = nil,
+}
+
+local function StartNoSlow()
+	if NoSlowState.connection then
+		NoSlowState.connection:Disconnect()
+	end
+	NoSlowState.connection = RunService.Heartbeat:Connect(function()
+		if not Toggles.NoSlowToggle or not Toggles.NoSlowToggle.Value then
+			NoSlowState.wasSlowed = false
+			return
+		end
+		local char = LocalPlayer.Character
+		if not char then return end
+		local hrp = char:FindFirstChild("HumanoidRootPart")
+		local humanoid = char:FindFirstChildOfClass("Humanoid")
+		if not hrp or not hrp.Parent or not humanoid or humanoid.Health <= 0 then return end
+
+		if humanoid.WalkSpeed <= 8 and not NoSlowState.wasSlowed then
+			NoSlowState.wasSlowed = true
+		end
+
+		local moveDir = Vector3.new(0, 0, 0)
+		if UIS:IsKeyDown(Enum.KeyCode.W) then
+			moveDir = moveDir + (camera.CFrame.LookVector * Vector3.new(1, 0, 1)).Unit
+		end
+		if UIS:IsKeyDown(Enum.KeyCode.A) then
+			moveDir = moveDir - (camera.CFrame.RightVector * Vector3.new(1, 0, 1)).Unit
+		end
+		if UIS:IsKeyDown(Enum.KeyCode.S) then
+			moveDir = moveDir - (camera.CFrame.LookVector * Vector3.new(1, 0, 1)).Unit
+		end
+		if UIS:IsKeyDown(Enum.KeyCode.D) then
+			moveDir = moveDir + (camera.CFrame.RightVector * Vector3.new(1, 0, 1)).Unit
+		end
+
+		if moveDir.Magnitude > 0 then
+			moveDir = moveDir.Unit
+			NoSlowState.currentVelocity = moveDir * 16
+		else
+			NoSlowState.currentVelocity = NoSlowState.currentVelocity * Options.NoSlowFriction.Value
+		end
+
+		if NoSlowState.wasSlowed and humanoid.WalkSpeed <= 8 then
+			local verticalVel = hrp.AssemblyLinearVelocity.Y
+			hrp.AssemblyLinearVelocity = Vector3.new(
+				NoSlowState.currentVelocity.X,
+				verticalVel,
+				NoSlowState.currentVelocity.Z
+			)
+		end
+
+		if NoSlowState.wasSlowed and humanoid.WalkSpeed > 8 then
+			NoSlowState.wasSlowed = false
+		end
+	end)
+end
+
+local function StopNoSlow()
+	if NoSlowState.connection then
+		NoSlowState.connection:Disconnect()
+		NoSlowState.connection = nil
+	end
+	NoSlowState.wasSlowed = false
+	NoSlowState.currentVelocity = Vector3.new(0, 0, 0)
+end
+
+Movement:AddToggle("NoSlowToggle", {
+	Text = "Legit No Stun",
+	Default = false,
+	Tooltip = "Maintains movement speed during stun/slow effects",
+	Callback = function(v)
+		if v then
+			StartNoSlow()
+		else
+			StopNoSlow()
+		end
+	end
+}):AddKeyPicker("NoSlowBind", {
+	Default = "",
+	Mode = "Toggle",
+	SyncToggleState = true,
+	Text = "No Slow Bind",
+	Callback = function()
+		Toggles.NoSlowToggle:SetValue(not Toggles.NoSlowToggle.Value)
+	end
+})
+
+Movement:AddSlider("NoSlowFriction", {
+	Text = "No Stun Friction Multiplier",
+	Default = 0.85,
+	Min = 0.85,
+	Max = 1,
+	Rounding = 2,
+	Callback = function(_)
+		-- Value read live from Options.NoSlowFriction.Value
+	end
+})
+
+-- ========================
+-- ESP
+-- ========================
+local ESPGroup = Tabs.ESP:AddLeftGroupbox("ESP Settings")
+local ESPDataGroup = Tabs.ESP:AddRightGroupbox("Data Fields")
+
+ESPGroup:AddToggle("ESPEnabled", {
+	Text = "Enable ESP (Master)",
+	Default = false,
+	Tooltip = "Master toggle — enables/disables all ESP",
+})
+
+ESPGroup:AddToggle("ESPPlayers", {
+	Text = "  ↳ Player ESP",
+	Default = false,
+	Tooltip = "Show ESP on real players",
+})
+
+ESPGroup:AddToggle("ESPHumanNPC", {
+	Text = "  ↳ Human NPC ESP",
+	Default = false,
+	Tooltip = "Show ESP on Human NPCs in workspace.Alive",
+})
+
+ESPGroup:AddToggle("ESPZombieNPC", {
+	Text = "  ↳ Zombie NPC ESP",
+	Default = false,
+	Tooltip = "Show ESP on Zombie NPCs in workspace.Alive",
+})
+
+ESPGroup:AddSlider("ESPMaxDistance", {
+	Text = "Max Distance",
+	Default = 500,
+	Min = 50,
+	Max = 10000,
+	Rounding = 0,
+	Suffix = " studs",
+	Tooltip = "Maximum distance to show ESP",
+})
+
+ESPGroup:AddSlider("ESPTextSize", {
+	Text = "Text Size",
+	Default = 14,
+	Min = 2,
+	Max = 50,
+	Rounding = 0,
+	Tooltip = "Size of ESP text",
+})
+
+ESPGroup:AddToggle("ESPShowSelf", {
+	Text = "Show On Self",
+	Default = false,
+	Tooltip = "Show ESP on your own character",
+})
+
+ESPGroup:AddToggle("ESPShowDistance", {
+	Text = "Show Distance",
+	Default = true,
+	Tooltip = "Show distance to player in ESP",
+})
+
+ESPGroup:AddToggle("ESPShowHealth", {
+	Text = "Show Health",
+	Default = false,
+	Tooltip = "Show player's current HP in ESP",
+})
+
+ESPGroup:AddToggle("ESPShowRace", {
+	Text = "Show Race",
+	Default = false,
+	Tooltip = "Show player's race (Vampire, Hamon, Pillarmen, Zombie, Human)",
+})
+
+ESPGroup:AddLabel("Text Color"):AddColorPicker("ESPTextColor", {
+	Default = Color3.fromRGB(255, 255, 255),
+	Title = "ESP Text Color",
+})
+
+ESPGroup:AddLabel("Background Color"):AddColorPicker("ESPBGColor", {
+	Default = Color3.fromRGB(0, 0, 0),
+	Title = "ESP Background Color",
+})
+
+ESPGroup:AddSlider("ESPBGTransparency", {
+	Text = "Background Transparency",
+	Default = 0.5,
+	Min = 0,
+	Max = 1,
+	Rounding = 2,
+	Tooltip = "Transparency of the ESP background",
+})
+
+ESPGroup:AddSlider("ESPBoxWidth", {
+	Text = "Box Width",
+	Default = 200,
+	Min = 80,
+	Max = 500,
+	Rounding = 0,
+	Suffix = " px",
+	Tooltip = "Width of the ESP box",
+})
+
+ESPGroup:AddSlider("ESPBoxHeight", {
+	Text = "Box Height",
+	Default = 120,
+	Min = 40,
+	Max = 400,
+	Rounding = 0,
+	Suffix = " px",
+	Tooltip = "Height of the ESP box",
+})
+
+local DATA_FOLDERS = { "EXP", "Unlocked" }
+
+local enabledFields = {}
+local fieldToggles = {}
+
+local function scanDataFields()
+	local fields = { EXP = {}, Unlocked = {} }
+
+	local samplePlayer = LocalPlayer
+	if not samplePlayer then
+		for _, p in ipairs(Players:GetPlayers()) do
+			samplePlayer = p
+			break
+		end
+	end
+
+	if not samplePlayer then return fields end
+
+	local data = samplePlayer:FindFirstChild("Data")
+	if not data then return fields end
+
+	for _, folderName in ipairs(DATA_FOLDERS) do
+		local folder = data:FindFirstChild(folderName)
+		if folder then
+			for _, child in ipairs(folder:GetChildren()) do
+				if child:IsA("IntValue") or child:IsA("StringValue") or child:IsA("NumberValue") or child:IsA("BoolValue") then
+					table.insert(fields[folderName], child.Name)
+				end
+			end
+		end
+	end
+
+	return fields
+end
+
+local function buildFieldToggles()
+	local fields = scanDataFields()
+
+	for _, folderName in ipairs(DATA_FOLDERS) do
+		if #fields[folderName] > 0 then
+			ESPDataGroup:AddLabel("── " .. folderName .. " ──", false)
+			for _, fieldName in ipairs(fields[folderName]) do
+				local idx = "ESPField_" .. folderName .. "_" .. fieldName
+				ESPDataGroup:AddToggle(idx, {
+					Text = fieldName,
+					Default = false,
+					Tooltip = "Show " .. folderName .. "." .. fieldName .. " in ESP",
+				})
+				enabledFields[idx] = { folder = folderName, field = fieldName }
+				table.insert(fieldToggles, idx)
+			end
+		end
+	end
+end
+
+task.spawn(function()
+	task.wait(3)
+	buildFieldToggles()
+end)
+
+local espBillboards = {}
+
+local function getFieldValue(player, folderName, fieldName)
+	local data = player:FindFirstChild("Data")
+	if not data then return nil end
+	local folder = data:FindFirstChild(folderName)
+	if not folder then return nil end
+	local val = folder:FindFirstChild(fieldName)
+	if not val then return nil end
+	return val.Value
+end
+
+local function getPlayerRace(player)
+	local data = player:FindFirstChild("Data")
+	if not data then return "Unknown" end
+	local unlocked = data:FindFirstChild("Unlocked")
+	if not unlocked then return "Human" end
+
+	local races = { "Vampire", "Hamon", "Pillarmen", "Zombie" }
+	for _, race in ipairs(races) do
+		local val = unlocked:FindFirstChild(race)
+		if val and (val.Value == true or val.Value == "true") then
+			return race
+		end
+	end
+	return "Human"
+end
+
+local function buildESPText(player)
+	local lines = {}
+
+	table.insert(lines, player.DisplayName .. " (@" .. player.Name .. ")")
+
+	if Toggles.ESPShowHealth and Toggles.ESPShowHealth.Value then
+		local char = player.Character
+		local hum = char and char:FindFirstChildOfClass("Humanoid")
+		if hum then
+			table.insert(lines, "❤️ " .. math.floor(hum.Health) .. " / " .. math.floor(hum.MaxHealth))
+		end
+	end
+
+	if Toggles.ESPShowRace and Toggles.ESPShowRace.Value then
+		table.insert(lines, "🧬 " .. getPlayerRace(player))
+	end
+
+	if Toggles.ESPShowDistance.Value then
+		local char = player.Character
+		local localChar = LocalPlayer.Character
+		if char and localChar then
+			local hrp = char:FindFirstChild("HumanoidRootPart")
+			local lhrp = localChar:FindFirstChild("HumanoidRootPart")
+			if hrp and lhrp then
+				local dist = math.floor((hrp.Position - lhrp.Position).Magnitude)
+				table.insert(lines, "📍 " .. dist .. " studs")
+			end
+		end
+	end
+
+	for _, idx in ipairs(fieldToggles) do
+		if Toggles[idx] and Toggles[idx].Value then
+			local info = enabledFields[idx]
+			local val = getFieldValue(player, info.folder, info.field)
+			if val ~= nil then
+				table.insert(lines, info.field .. ": " .. tostring(val))
+			end
+		end
+	end
+
+	return table.concat(lines, "\n")
+end
+
+local function createBillboard(player)
+	local char = player.Character
+	if not char then return end
+	local hrp = char:FindFirstChild("HumanoidRootPart")
+	if not hrp then return end
+
+	if espBillboards[player] then
+		espBillboards[player]:Destroy()
+		espBillboards[player] = nil
+	end
+
+	local bb = Instance.new("BillboardGui")
+	bb.Name = "HamonESP"
+	bb.Adornee = hrp
+	bb.AlwaysOnTop = true
+	bb.StudsOffset = Vector3.new(0, 3.5, 0)
+	bb.Size = UDim2.new(0, Options.ESPBoxWidth.Value, 0, Options.ESPBoxHeight.Value)
+	bb.MaxDistance = Options.ESPMaxDistance.Value
+	bb.ResetOnSpawn = false
+	bb.Parent = game:GetService("CoreGui")
+
+	local bg = Instance.new("Frame")
+	bg.Size = UDim2.new(1, 0, 1, 0)
+	bg.BackgroundColor3 = Options.ESPBGColor.Value
+	bg.BackgroundTransparency = Options.ESPBGTransparency.Value
+	bg.BorderSizePixel = 0
+	bg.Parent = bb
+
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(0, 6)
+	corner.Parent = bg
+
+	local padding = Instance.new("UIPadding")
+	padding.PaddingLeft = UDim.new(0, 5)
+	padding.PaddingRight = UDim.new(0, 5)
+	padding.PaddingTop = UDim.new(0, 4)
+	padding.PaddingBottom = UDim.new(0, 4)
+	padding.Parent = bg
+
+	local label = Instance.new("TextLabel")
+	label.Name = "ESPLabel"
+	label.Size = UDim2.new(1, 0, 1, 0)
+	label.BackgroundTransparency = 1
+	label.TextColor3 = Options.ESPTextColor.Value
+	label.TextSize = Options.ESPTextSize.Value
+	label.Font = Enum.Font.GothamBold
+	label.TextXAlignment = Enum.TextXAlignment.Left
+	label.TextYAlignment = Enum.TextYAlignment.Top
+	label.TextWrapped = true
+	label.Text = buildESPText(player)
+	label.Parent = bg
+
+	espBillboards[player] = bb
+end
+
+local function removeESP(player)
+	if espBillboards[player] then
+		espBillboards[player]:Destroy()
+		espBillboards[player] = nil
+	end
+end
+
+local function refreshAllESP()
+	if not Toggles.ESPEnabled.Value then
+		for player, _ in pairs(espBillboards) do
+			removeESP(player)
+		end
+		return
+	end
+
+	if not Toggles.ESPPlayers.Value then
+		for player, _ in pairs(espBillboards) do
+			removeESP(player)
+		end
+		return
+	end
+
+	for _, player in ipairs(Players:GetPlayers()) do
+		if player == LocalPlayer and not Toggles.ESPShowSelf.Value then
+			removeESP(player)
+			continue
+		end
+
+		if player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
+			if not espBillboards[player] then
+				createBillboard(player)
+			end
+		end
+	end
+end
+
+task.spawn(function()
+	while task.wait(0.1) do
+		if not Toggles.ESPEnabled then continue end
+		if not Toggles.ESPEnabled.Value then continue end
+		if not Toggles.ESPPlayers then continue end
+
+		if not Toggles.ESPPlayers.Value then
+			for player, _ in pairs(espBillboards) do
+				removeESP(player)
+			end
+			continue
+		end
+
+		for _, player in ipairs(Players:GetPlayers()) do
+			if player == LocalPlayer and not Toggles.ESPShowSelf.Value then continue end
+
+			local bb = espBillboards[player]
+			if not bb then
+				if player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
+					createBillboard(player)
+					bb = espBillboards[player]
+				end
+			end
+
+			if bb then
+				local label = bb:FindFirstChild("Frame") and bb.Frame:FindFirstChild("ESPLabel")
+				if label then
+					label.Text = buildESPText(player)
+					label.TextColor3 = Options.ESPTextColor.Value
+					label.TextSize = Options.ESPTextSize.Value
+				end
+
+				local bg = bb:FindFirstChild("Frame")
+				if bg then
+					bg.BackgroundColor3 = Options.ESPBGColor.Value
+					bg.BackgroundTransparency = Options.ESPBGTransparency.Value
+				end
+
+				bb.MaxDistance = Options.ESPMaxDistance.Value
+				bb.Size = UDim2.new(0, Options.ESPBoxWidth.Value, 0, Options.ESPBoxHeight.Value)
+			end
+		end
+	end
+end)
+
+Players.PlayerAdded:Connect(function(player)
+	player.CharacterAdded:Connect(function()
+		task.wait(1)
+		if Toggles.ESPEnabled and Toggles.ESPEnabled.Value and Toggles.ESPPlayers and Toggles.ESPPlayers.Value then
+			createBillboard(player)
+		end
+	end)
+end)
+
+Players.PlayerRemoving:Connect(function(player)
+	removeESP(player)
+end)
+
+for _, player in ipairs(Players:GetPlayers()) do
+	player.CharacterAdded:Connect(function()
+		task.wait(1)
+		if Toggles.ESPEnabled and Toggles.ESPEnabled.Value and Toggles.ESPPlayers and Toggles.ESPPlayers.Value then
+			createBillboard(player)
+		end
+	end)
+end
+
+Toggles.ESPEnabled:OnChanged(function()
+	refreshAllESP()
+end)
+
+Toggles.ESPPlayers:OnChanged(function()
+	refreshAllESP()
+end)
+
+-- ========================
+-- NPC ESP (Human + Zombie)
+-- ========================
+local npcESPBillboards = {}
+
+local function getNPCRootPart(npcModel)
+	local hrp = npcModel:FindFirstChild("HumanoidRootPart")
+	if hrp then return hrp end
+	return npcModel.PrimaryPart or npcModel:FindFirstChildWhichIsA("BasePart")
+end
+
+local function createNPCBillboard(npcModel, labelColor)
+	local root = getNPCRootPart(npcModel)
+	if not root then return end
+
+	if npcESPBillboards[npcModel] then
+		npcESPBillboards[npcModel]:Destroy()
+		npcESPBillboards[npcModel] = nil
+	end
+
+	local bb = Instance.new("BillboardGui")
+	bb.Name = "HamonNPCESP"
+	bb.Adornee = root
+	bb.AlwaysOnTop = true
+	bb.StudsOffset = Vector3.new(0, 3.5, 0)
+	bb.Size = UDim2.new(0, Options.ESPBoxWidth.Value, 0, 60)
+	bb.MaxDistance = Options.ESPMaxDistance.Value
+	bb.ResetOnSpawn = false
+	bb.Parent = game:GetService("CoreGui")
+
+	local bg = Instance.new("Frame")
+	bg.Size = UDim2.new(1, 0, 1, 0)
+	bg.BackgroundColor3 = Options.ESPBGColor.Value
+	bg.BackgroundTransparency = Options.ESPBGTransparency.Value
+	bg.BorderSizePixel = 0
+	bg.Parent = bb
+
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(0, 6)
+	corner.Parent = bg
+
+	local padding = Instance.new("UIPadding")
+	padding.PaddingLeft = UDim.new(0, 5)
+	padding.PaddingRight = UDim.new(0, 5)
+	padding.PaddingTop = UDim.new(0, 4)
+	padding.PaddingBottom = UDim.new(0, 4)
+	padding.Parent = bg
+
+	local label = Instance.new("TextLabel")
+	label.Name = "ESPLabel"
+	label.Size = UDim2.new(1, 0, 1, 0)
+	label.BackgroundTransparency = 1
+	label.TextColor3 = labelColor
+	label.TextSize = Options.ESPTextSize.Value
+	label.Font = Enum.Font.GothamBold
+	label.TextXAlignment = Enum.TextXAlignment.Left
+	label.TextYAlignment = Enum.TextYAlignment.Top
+	label.TextWrapped = true
+	label.Text = "[NPC] " .. npcModel.Name
+	label.Parent = bg
+
+	npcESPBillboards[npcModel] = bb
+end
+
+local function removeNPCBillboard(npcModel)
+	if npcESPBillboards[npcModel] then
+		npcESPBillboards[npcModel]:Destroy()
+		npcESPBillboards[npcModel] = nil
+	end
+end
+
+task.spawn(function()
+	while task.wait(0.15) do
+		local masterOn = Toggles.ESPEnabled and Toggles.ESPEnabled.Value
+		local humanOn = masterOn and Toggles.ESPHumanNPC and Toggles.ESPHumanNPC.Value
+		local zombieOn = masterOn and Toggles.ESPZombieNPC and Toggles.ESPZombieNPC.Value
+
+		-- Clean up billboards for NPCs no longer in workspace
+		for model, _ in pairs(npcESPBillboards) do
+			if not model or not model.Parent then
+				removeNPCBillboard(model)
+			end
+		end
+
+		if not humanOn and not zombieOn then
+			for model, _ in pairs(npcESPBillboards) do
+				removeNPCBillboard(model)
+			end
+			continue
+		end
+
+		local aliveFolder = workspace:FindFirstChild("Alive")
+		if not aliveFolder then continue end
+
+		local localHRP = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+
+		for _, child in ipairs(aliveFolder:GetChildren()) do
+			local name = child.Name
+			local isHuman = string.sub(name, 1, 5) == "Human"
+			local isZombie = string.sub(name, 1, 6) == "Zombie"
+
+			local shouldShow = (isHuman and humanOn) or (isZombie and zombieOn)
+
+			if not shouldShow then
+				removeNPCBillboard(child)
+				continue
+			end
+
+			local root = getNPCRootPart(child)
+			if not root then continue end
+
+			if not npcESPBillboards[child] then
+				local color = isZombie and Color3.fromRGB(100, 255, 100) or Color3.fromRGB(255, 200, 80)
+				createNPCBillboard(child, color)
+			end
+
+			local bb = npcESPBillboards[child]
+			if bb then
+				local lbl = bb:FindFirstChild("Frame") and bb.Frame:FindFirstChild("ESPLabel")
+				if lbl then
+					local distStr = ""
+					if localHRP then
+						local dist = math.floor((root.Position - localHRP.Position).Magnitude)
+						distStr = "\n📍 " .. dist .. " studs"
+					end
+					lbl.Text = "[NPC] " .. name .. distStr
+					lbl.TextSize = Options.ESPTextSize.Value
+				end
+				local bgFrame = bb:FindFirstChild("Frame")
+				if bgFrame then
+					bgFrame.BackgroundColor3 = Options.ESPBGColor.Value
+					bgFrame.BackgroundTransparency = Options.ESPBGTransparency.Value
+				end
+				bb.MaxDistance = Options.ESPMaxDistance.Value
+				bb.Size = UDim2.new(0, Options.ESPBoxWidth.Value, 0, 60)
+			end
+		end
+	end
+end)
+
+-- ========================
+-- BUY ITEMS SECTION
+-- ========================
+local BuyGroup = Tabs.Farm:AddLeftGroupbox("Buy Items")
+
+local SHOP_FOLDERS = { "Unique", "Skills", "Items", "Classes" }
+
+local function getShopItems()
+	local items = {}
+	local shopButtons = workspace:FindFirstChild("ShopButtons")
+	if not shopButtons then return items end
+
+	for _, folderName in ipairs(SHOP_FOLDERS) do
+		local folder = shopButtons:FindFirstChild(folderName)
+		if folder then
+			for _, child in ipairs(folder:GetChildren()) do
+				local hasClickDetector = false
+				for _, d in ipairs(child:GetDescendants()) do
+					if d:IsA("ClickDetector") then
+						hasClickDetector = true
+						break
+					end
+				end
+				if child:IsA("BasePart") and child:FindFirstChildOfClass("ClickDetector") then
+					hasClickDetector = true
+				end
+				if hasClickDetector then
+					table.insert(items, child.Name)
+				end
+			end
+		end
+	end
+
+	return items
+end
+
+local shopItems = getShopItems()
+
+if #shopItems == 0 then
+	table.insert(shopItems, "No items found")
+end
+
+BuyGroup:AddDropdown("BuyItemDropdown", {
+	Values = shopItems,
+	Default = 1,
+	Multi = false,
+	Text = "Item to Buy",
+	Tooltip = "Select which shop item to purchase",
+})
+
+BuyGroup:AddSlider("BuyAmount", {
+	Text = "Buy Amount",
+	Default = 1,
+	Min = 1,
+	Max = 100,
+	Rounding = 0,
+	Tooltip = "How many times to click/buy",
+})
+
+BuyGroup:AddButton("Buy", function()
+	local selectedItem = Options.BuyItemDropdown.Value
+	local amount = Options.BuyAmount.Value
+
+	if not selectedItem or selectedItem == "No items found" then
+		Library:Notify("No item selected!")
+		return
+	end
+
+	local shopButtons = workspace:FindFirstChild("ShopButtons")
+	if not shopButtons then
+		Library:Notify("ShopButtons not found!")
+		return
+	end
+
+	local targetItem = nil
+	for _, folderName in ipairs(SHOP_FOLDERS) do
+		local folder = shopButtons:FindFirstChild(folderName)
+		if folder then
+			local found = folder:FindFirstChild(selectedItem)
+			if found then
+				targetItem = found
+				break
+			end
+		end
+	end
+
+	if not targetItem then
+		Library:Notify("Item not found: " .. selectedItem)
+		return
+	end
+
+	local clickDetector = targetItem:FindFirstChildOfClass("ClickDetector")
+	if not clickDetector then
+		for _, d in ipairs(targetItem:GetDescendants()) do
+			if d:IsA("ClickDetector") then
+				clickDetector = d
+				break
+			end
+		end
+	end
+
+	if not clickDetector then
+		Library:Notify("No ClickDetector found on: " .. selectedItem)
+		return
+	end
+
+	task.spawn(function()
+		Library:Notify("Buying " .. selectedItem .. " x" .. amount)
+		for i = 1, amount do
+			fireclickdetector(clickDetector)
+			task.wait(0.1)
+		end
+		Library:Notify("Done buying " .. selectedItem)
+	end)
+end)
+
+-- ========================
+-- INTERACT NPCs SECTION
+-- ========================
+BuyGroup:AddDivider()
+BuyGroup:AddLabel("— NPC Interact —")
+
+local function getNPCsWithClickDetectors()
+	local npcs = {}
+	local npcFolder = workspace:FindFirstChild("NPCs")
+	if not npcFolder then return {"No NPCs found"} end
+
+	for _, child in ipairs(npcFolder:GetChildren()) do
+		local hasCD = false
+		for _, desc in ipairs(child:GetDescendants()) do
+			if desc:IsA("ClickDetector") then
+				hasCD = true
+				break
+			end
+		end
+		if child:IsA("BasePart") and child:FindFirstChildOfClass("ClickDetector") then
+			hasCD = true
+		end
+		if hasCD then
+			table.insert(npcs, child.Name)
+		end
+	end
+
+	if #npcs == 0 then table.insert(npcs, "No NPCs found") end
+	return npcs
+end
+
+local npcList = getNPCsWithClickDetectors()
+
+local npcDropdown = BuyGroup:AddDropdown("NPCDropdown", {
+	Values = npcList,
+	Default = 1,
+	Multi = false,
+	Text = "NPC to Interact",
+	Tooltip = "Select an NPC to interact with",
+})
+
+BuyGroup:AddButton("Refresh NPCs", function()
+	local newList = getNPCsWithClickDetectors()
+	npcDropdown:SetValues(newList)
+	Library:Notify("NPC list refreshed (" .. #newList .. " found)")
+end)
+
+BuyGroup:AddButton("Interact", function()
+	local selected = Options.NPCDropdown.Value
+	if not selected or selected == "No NPCs found" then
+		Library:Notify("No NPC selected!")
+		return
+	end
+
+	local npcFolder = workspace:FindFirstChild("NPCs")
+	if not npcFolder then
+		Library:Notify("NPCs folder not found!")
+		return
+	end
+
+	local target = npcFolder:FindFirstChild(selected)
+	if not target then
+		Library:Notify("NPC not found: " .. selected)
+		return
+	end
+
+	local clickDetector = nil
+	if target:IsA("BasePart") then
+		clickDetector = target:FindFirstChildOfClass("ClickDetector")
+	end
+	if not clickDetector then
+		for _, desc in ipairs(target:GetDescendants()) do
+			if desc:IsA("ClickDetector") then
+				clickDetector = desc
+				break
+			end
+		end
+	end
+
+	if not clickDetector then
+		Library:Notify("No ClickDetector on: " .. selected)
+		return
+	end
+
+	fireclickdetector(clickDetector)
+	Library:Notify("Interacted with " .. selected)
+end)
+-- ========================
+-- TELEPORT
+-- ========================
+local TeleportLocations = {
+	{ Name = "Safe Spot", Position = PLATFORM_POSITION + Vector3.new(0, 4,0) },
+	{ Name = "Random Roof", Position = Vector3.new(-46.24393081665039, 95.74998474121094, -10.492583274841309) },
+    { Name = "WeirdBaseplate", Position = Vector3.new(-1131.9990234375, -15.123176574707031, 252) },
+    { Name = "CassetteShop", Position = Vector3.new(-1.150965690612793, 3.799999237060547, -345.50579833984375)},
+	-- Add more here: { Name = "My Spot", Position = Vector3.new(x, y, z) },
+}
+
+local TeleportGroup = Tabs.Farm:AddRightGroupbox("Teleport")
+
+local tpNames = {}
+for _, loc in ipairs(TeleportLocations) do
+	table.insert(tpNames, loc.Name)
+end
+
+TeleportGroup:AddDropdown("TeleportDropdown", {
+	Values = tpNames,
+	Default = 1,
+	Multi = false,
+	Text = "Location",
+	Tooltip = "Select a location to teleport to",
+})
+
+TeleportGroup:AddButton("Teleport", function()
+	local selected = Options.TeleportDropdown.Value
+	local hrp = getHRP()
+	if not hrp then
+		Library:Notify("No character found!")
+		return
+	end
+
+	for _, loc in ipairs(TeleportLocations) do
+		if loc.Name == selected then
+			hrp.CFrame = CFrame.new(loc.Position)
+			Library:Notify("Teleported to " .. loc.Name)
+			return
+		end
+	end
+
+	Library:Notify("Location not found!")
+end)
+
+-- ========================
+-- PLAYER TARGET TAB
+-- ========================
+local TargetGroup = Tabs.PlayerTarget:AddLeftGroupbox("Target")
+local StatsGroup = Tabs.PlayerTarget:AddRightGroupbox("Target Stats")
+
+local function getPlayerNames()
+	local names = {}
+	for _, p in ipairs(Players:GetPlayers()) do
+		table.insert(names, p.Name)
+	end
+	if #names == 0 then
+		table.insert(names, "No players found")
+	end
+	return names
+end
+
+local currentTarget = nil
+
+TargetGroup:AddDropdown("TargetPlayer", {
+	Values = getPlayerNames(),
+	Default = 1,
+	Multi = false,
+	Text = "Select Player",
+	Tooltip = "Select a player to target",
+})
+
+TargetGroup:AddButton("Refresh List", function()
+	local newNames = getPlayerNames()
+	Options.TargetPlayer:SetValues(newNames)
+	Library:Notify("Player list refreshed!")
+end)
+
+TargetGroup:AddDivider()
+
+Options.TargetPlayer:OnChanged(function()
+	local name = Options.TargetPlayer.Value
+	currentTarget = Players:FindFirstChild(name)
+end)
+
+local function getTarget()
+	local name = Options.TargetPlayer.Value
+	if not name or name == "No players found" then
+		Library:Notify("No player selected!")
+		return nil
+	end
+	local plr = Players:FindFirstChild(name)
+	if not plr then
+		Library:Notify("Player not found, they may have left!")
+		return nil
+	end
+	return plr
+end
+
+TargetGroup:AddButton("Teleport to Target", function()
+	local target = getTarget()
+	if not target then return end
+
+	local char = target.Character
+	if not char then
+		Library:Notify("Target has no character!")
+		return
+	end
+
+	local targetHRP = char:FindFirstChild("HumanoidRootPart")
+	if not targetHRP then
+		Library:Notify("Target HRP not found!")
+		return
+	end
+
+	local hrp = getHRP()
+	if not hrp then return end
+
+	hrp.CFrame = targetHRP.CFrame * CFrame.new(0, 0, 6)
+	Library:Notify("Teleported to " .. target.Name)
+end)
+
+local spectating = false
+local spectateConnection = nil
+
+TargetGroup:AddToggle("SpectateTarget", {
+	Text = "Spectate Target",
+	Default = false,
+	Tooltip = "Follow the target's camera",
+})
+
+Toggles.SpectateTarget:OnChanged(function()
+	if Toggles.SpectateTarget.Value then
+		local target = getTarget()
+		if not target then
+			Toggles.SpectateTarget:SetValue(false)
+			return
+		end
+
+		Library:Notify("Spectating " .. target.Name)
+
+		local cam = workspace.CurrentCamera
+		spectateConnection = RunService.RenderStepped:Connect(function()
+			if not Toggles.SpectateTarget.Value then return end
+
+			local t = Players:FindFirstChild(Options.TargetPlayer.Value)
+			if not t or not t.Character then return end
+
+			local tHRP = t.Character:FindFirstChild("HumanoidRootPart")
+			if not tHRP then return end
+
+			cam.CameraType = Enum.CameraType.Custom
+			cam.CFrame = tHRP.CFrame * CFrame.new(0, 2, 6)
+			cam.Focus = tHRP.CFrame
+		end)
+	else
+		if spectateConnection then
+			spectateConnection:Disconnect()
+			spectateConnection = nil
+		end
+		workspace.CurrentCamera.CameraType = Enum.CameraType.Custom
+		Library:Notify("Stopped spectating")
+	end
+end)
+
+TargetGroup:AddDivider()
+
+local statsLabel = StatsGroup:AddLabel("Select a player and press\n'Get Target Stats'", true)
+
+local function buildTargetStats(target)
+	if not target then return "No target selected" end
+
+	local data = target:FindFirstChild("Data")
+	if not data then return "No data found for " .. target.Name end
+
+	local lines = {}
+	table.insert(lines, "=== " .. target.Name .. " ===")
+
+	for _, folder in ipairs(data:GetChildren()) do
+		if folder:IsA("Folder") then
+			table.insert(lines, "[ " .. folder.Name .. " ]")
+			for _, val in ipairs(folder:GetChildren()) do
+				if val:IsA("IntValue") or val:IsA("StringValue") or val:IsA("NumberValue") or val:IsA("BoolValue") then
+					table.insert(lines, "  " .. val.Name .. ": " .. tostring(val.Value))
+				end
+			end
+		elseif folder:IsA("IntValue") or folder:IsA("StringValue") or folder:IsA("NumberValue") or folder:IsA("BoolValue") then
+			table.insert(lines, folder.Name .. ": " .. tostring(folder.Value))
+		end
+	end
+
+	if #lines == 1 then
+		table.insert(lines, "No readable values found")
+	end
+
+	return table.concat(lines, "\n")
+end
+
+TargetGroup:AddButton("Get Target Stats", function()
+	local target = getTarget()
+	if not target then return end
+
+	local stats = buildTargetStats(target)
+	statsLabel:SetText(stats)
+	Library:Notify("Loaded stats for " .. target.Name)
+end)
+
+TargetGroup:AddToggle("AutoUpdateStats", {
+	Text = "Auto Update Stats",
+	Default = false,
+	Tooltip = "Continuously updates target stats",
+})
+
+task.spawn(function()
+	while task.wait(1) do
+		if not Toggles.AutoUpdateStats then continue end
+		if not Toggles.AutoUpdateStats.Value then continue end
+
+		local target = Players:FindFirstChild(Options.TargetPlayer.Value)
+		if target then
+			local stats = buildTargetStats(target)
+			statsLabel:SetText(stats)
+		end
+	end
+end)
+
+Players.PlayerAdded:Connect(function()
+	local newNames = getPlayerNames()
+	Options.TargetPlayer:SetValues(newNames)
+end)
+
+Players.PlayerRemoving:Connect(function(p)
+	if Options.TargetPlayer.Value == p.Name then
+		if spectateConnection then
+			spectateConnection:Disconnect()
+			spectateConnection = nil
+		end
+		Toggles.SpectateTarget:SetValue(false)
+	end
+	local newNames = getPlayerNames()
+	Options.TargetPlayer:SetValues(newNames)
+end)
+
+-- ========================
+-- EXTRAS TAB
+-- ========================
+local ExtrasGroup = Tabs.Extras:AddLeftGroupbox("Server Hop")
+
+ExtrasGroup:AddLabel("Hops to a server with the fewest or most players.")
+ExtrasGroup:AddDivider()
+
+local S_H = game:GetService("HttpService")
+local S_T = game:GetService("TeleportService")
+
+local function fetchServers(sortLowest)
+	local servers = {}
+	local cursor = ""
+
+	-- Fetch up to 2 pages for a decent pool
+	for _ = 1, 2 do
+		local url = "https://games.roblox.com/v1/games/" .. game.PlaceId .. "/servers/Public?sortOrder=Asc&limit=100"
+		if cursor ~= "" then
+			url = url .. "&cursor=" .. cursor
+		end
+
+		local success, result = pcall(function()
+			return game:HttpGet(url)
+		end)
+		if not success then break end
+
+		local parsed = pcall(function()
+			parsed = S_H:JSONDecode(result)
+		end) and parsed or S_H:JSONDecode(result)
+
+		if not parsed or not parsed.data then break end
+
+		for _, v in ipairs(parsed.data) do
+			if tostring(v.id) ~= tostring(game.JobId) and v.playing and v.maxPlayers and v.playing < v.maxPlayers then
+				table.insert(servers, v)
+			end
+		end
+
+		if parsed.nextPageCursor and parsed.nextPageCursor ~= "null" and parsed.nextPageCursor ~= nil then
+			cursor = parsed.nextPageCursor
+		else
+			break
+		end
+	end
+
+	return servers
+end
+
+ExtrasGroup:AddButton("Hop to Lowest Population", function()
+	Library:Notify("Fetching servers...")
+	task.spawn(function()
+		local ok, servers = pcall(fetchServers, true)
+		if not ok or #servers == 0 then
+			Library:Notify("No servers found!")
+			return
+		end
+		table.sort(servers, function(a, b) return a.playing < b.playing end)
+		local target = servers[1]
+		Library:Notify("Joining server with " .. target.playing .. " player(s)...")
+		pcall(function()
+			S_T:TeleportToPlaceInstance(game.PlaceId, target.id, Players.LocalPlayer)
+		end)
+	end)
+end)
+
+ExtrasGroup:AddButton("Hop to Highest Population", function()
+	Library:Notify("Fetching servers...")
+	task.spawn(function()
+		local ok, servers = pcall(fetchServers, false)
+		if not ok or #servers == 0 then
+			Library:Notify("No servers found!")
+			return
+		end
+		table.sort(servers, function(a, b) return a.playing > b.playing end)
+		local target = servers[1]
+		Library:Notify("Joining server with " .. target.playing .. " player(s)...")
+		pcall(function()
+			S_T:TeleportToPlaceInstance(game.PlaceId, target.id, Players.LocalPlayer)
+		end)
+	end)
+end)
+
+ExtrasGroup:AddButton("Hop to Mid-Size Server", function()
+	Library:Notify("Fetching servers...")
+	task.spawn(function()
+		local ok, servers = pcall(fetchServers, true)
+		if not ok or #servers == 0 then
+			Library:Notify("No servers found!")
+			return
+		end
+		table.sort(servers, function(a, b) return a.playing < b.playing end)
+		local midIndex = math.max(1, math.floor(#servers / 2))
+		local target = servers[midIndex]
+		Library:Notify("Joining mid-size server with " .. target.playing .. " player(s)...")
+		pcall(function()
+			S_T:TeleportToPlaceInstance(game.PlaceId, target.id, Players.LocalPlayer)
+		end)
+	end)
+end)
+
+ExtrasGroup:AddButton("Hop to Random Server", function()
+	Library:Notify("Fetching servers...")
+	task.spawn(function()
+		local ok, servers = pcall(fetchServers, true)
+		if not ok or #servers == 0 then
+			Library:Notify("No servers found!")
+			return
+		end
+		local target = servers[math.random(1, #servers)]
+		Library:Notify("Joining random server with " .. target.playing .. " player(s)...")
+		pcall(function()
+			S_T:TeleportToPlaceInstance(game.PlaceId, target.id, Players.LocalPlayer)
+		end)
+	end)
+end)
+
+-- ========================
+-- UI SETTINGS TAB
+-- ========================
+local MenuGroup = Tabs["UI Settings"]:AddLeftGroupbox("Menu")
+MenuGroup:AddToggle("KeybindMenuOpen", { Default = Library.KeybindFrame.Visible, Text = "Open Keybind Menu", Callback = function(v) Library.KeybindFrame.Visible = v end })
+MenuGroup:AddToggle("ShowCustomCursor", { Text = "Custom Cursor", Default = true, Callback = function(v) Library.ShowCustomCursor = v end })
+MenuGroup:AddDivider()
+MenuGroup:AddLabel("Menu bind"):AddKeyPicker("MenuKeybind", { Default = "RightShift", NoUI = true, Text = "Menu keybind" })
+MenuGroup:AddButton("Unload", function() Library:Unload() end)
+
+Library.ToggleKeybind = Options.MenuKeybind
+
+ThemeManager:SetLibrary(Library)
+SaveManager:SetLibrary(Library)
+SaveManager:IgnoreThemeSettings()
+SaveManager:SetIgnoreIndexes({ "MenuKeybind" })
+ThemeManager:SetFolder("HamonGame")
+SaveManager:SetFolder("HamonGame/farm")
+SaveManager:BuildConfigSection(Tabs["UI Settings"])
+ThemeManager:ApplyToTab(Tabs["UI Settings"])
+SaveManager:LoadAutoloadConfig()
