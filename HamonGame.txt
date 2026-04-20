@@ -301,6 +301,7 @@ FarmGroup:AddButton("Refresh Weapons", function()
 end)
 
 local holdGThread = nil
+local absorptionClickThread = nil
 
 FarmGroup:AddToggle('HoldGCharge', {
     Text = 'Hold G / Charge',
@@ -321,6 +322,34 @@ FarmGroup:AddToggle('HoldGCharge', {
                 holdGThread = nil
             end
             VIM:SendKeyEvent(false, Enum.KeyCode.G, false, game)
+        end
+    end
+})
+
+FarmGroup:AddToggle('AbsorptionAutoClick', {
+    Text = 'Absorption Auto Click',
+    Default = false,
+    Callback = function(Value)
+        if Value then
+            absorptionClickThread = task.spawn(function()
+                while true do
+                    local char = Players.LocalPlayer.Character
+                    if char then
+                        local equipped = char:FindFirstChildOfClass("Tool")
+                        if equipped and equipped.Name == "Absorption" then
+                            VIM:SendMouseButtonEvent(200, 200, 0, true, game, 1)
+                            task.wait(0.05)
+                            VIM:SendMouseButtonEvent(200, 200, 0, false, game, 1)
+                        end
+                    end
+                    task.wait(0.05)
+                end
+            end)
+        else
+            if absorptionClickThread then
+                task.cancel(absorptionClickThread)
+                absorptionClickThread = nil
+            end
         end
     end
 })
@@ -1135,65 +1164,95 @@ end)
 -- ========================
 local Movement = Tabs.Farm:AddLeftGroupbox("Movement")
 -- ========================
--- FLY
+-- FLY (Physics-based)
 -- ========================
-local CFloop = nil
+local flyConnection = nil
+local flyAtt = nil
+local flyVF = nil
+local flyBG = nil
 CFspeed = 50
 
 Movement:AddToggle("FlyToggle", {
-	Text = "Fly",
-	Default = false,
-	Callback = function(v)
-		if v then
-			Players.LocalPlayer.Character:FindFirstChildOfClass('Humanoid').PlatformStand = true
-			local Head = Players.LocalPlayer.Character:WaitForChild("Head")
-			Head.Anchored = true
-			if CFloop then CFloop:Disconnect() end
-			CFloop = RunService.Heartbeat:Connect(function(deltaTime)
-				local moveDirection = Players.LocalPlayer.Character:FindFirstChildOfClass('Humanoid').MoveDirection * (CFspeed * deltaTime)
-				local headCFrame = Head.CFrame
-				local camera = workspace.CurrentCamera
-				local cameraCFrame = camera.CFrame
-				local cameraOffset = headCFrame:ToObjectSpace(cameraCFrame).Position
-				cameraCFrame = cameraCFrame * CFrame.new(-cameraOffset.X, -cameraOffset.Y, -cameraOffset.Z + 1)
-				local cameraPosition = cameraCFrame.Position
-				local headPosition = headCFrame.Position
-				local objectSpaceVelocity = CFrame.new(cameraPosition, Vector3.new(headPosition.X, cameraPosition.Y, headPosition.Z)):VectorToObjectSpace(moveDirection)
-				Head.CFrame = CFrame.new(headPosition) * (cameraCFrame - cameraPosition) * CFrame.new(objectSpaceVelocity)
-			end)
-		else
-			if CFloop then
-				CFloop:Disconnect()
-				CFloop = nil
-			end
-			local char = Players.LocalPlayer.Character
-			if char then
-				local hum = char:FindFirstChildOfClass('Humanoid')
-				local head = char:FindFirstChild("Head")
-				if hum then hum.PlatformStand = false end
-				if head then head.Anchored = false end
-			end
-		end
-	end
+    Text = "Fly",
+    Default = false,
+    Callback = function(v)
+        local char = Players.LocalPlayer.Character
+        if not char then return end
+        local hrp = char:FindFirstChild("HumanoidRootPart")
+        local hum = char:FindFirstChildOfClass("Humanoid")
+        if not hrp or not hum then return end
+
+        if v then
+            hum.PlatformStand = true
+
+            flyAtt = Instance.new("Attachment", hrp)
+
+            flyVF = Instance.new("VectorForce")
+            flyVF.Attachment0 = flyAtt
+            flyVF.RelativeTo = Enum.ActuatorRelativeTo.World
+            flyVF.ApplyAtCenterOfMass = true
+            flyVF.Parent = hrp
+
+            flyBG = Instance.new("BodyGyro")
+            flyBG.MaxTorque = Vector3.new(1e9, 1e9, 1e9)
+            flyBG.P = 10000
+            flyBG.D = 500
+            flyBG.Parent = hrp
+
+            flyConnection = RunService.RenderStepped:Connect(function()
+                if not Toggles.FlyToggle.Value then return end
+                local c = Players.LocalPlayer.Character
+                local h = c and c:FindFirstChild("HumanoidRootPart")
+                if not h then return end
+
+                flyVF.Force = Vector3.new(0, workspace.Gravity * h.AssemblyMass, 0)
+
+                local move = Vector3.zero
+                local cam = workspace.CurrentCamera
+                if UIS:IsKeyDown(Enum.KeyCode.W) then move += cam.CFrame.LookVector end
+                if UIS:IsKeyDown(Enum.KeyCode.S) then move -= cam.CFrame.LookVector end
+                if UIS:IsKeyDown(Enum.KeyCode.A) then move -= cam.CFrame.RightVector end
+                if UIS:IsKeyDown(Enum.KeyCode.D) then move += cam.CFrame.RightVector end
+
+                h.AssemblyLinearVelocity = move.Magnitude > 0
+                    and move.Unit * CFspeed
+                    or Vector3.zero
+
+                flyBG.CFrame = CFrame.new(h.Position, h.Position + cam.CFrame.LookVector)
+            end)
+
+        else
+            if flyConnection then flyConnection:Disconnect() flyConnection = nil end
+            if flyVF then flyVF:Destroy() flyVF = nil end
+            if flyBG then flyBG:Destroy() flyBG = nil end
+            if flyAtt then flyAtt:Destroy() flyAtt = nil end
+
+            local c = Players.LocalPlayer.Character
+            if c then
+                local h2 = c:FindFirstChildOfClass("Humanoid")
+                if h2 then h2.PlatformStand = false end
+            end
+        end
+    end
 }):AddKeyPicker("FlyKey", {
-	Default = "",
-	Mode = "Toggle",
-	SyncToggleState = true,
-	Text = "Fly",
-	Callback = function()
-		Toggles.FlyToggle:SetValue(not Toggles.FlyToggle.Value)
-	end
+    Default = "",
+    Mode = "Toggle",
+    SyncToggleState = true,
+    Text = "Fly",
+    Callback = function()
+        Toggles.FlyToggle:SetValue(not Toggles.FlyToggle.Value)
+    end
 })
 
 Movement:AddSlider("FlySpeed", {
-	Text = "Fly Speed",
-	Default = 50,
-	Min = 25,
-	Max = 150,
-	Rounding = 0,
-	Callback = function(v)
-		CFspeed = v
-	end
+    Text = "Fly Speed",
+    Default = 50,
+    Min = 25,
+    Max = 150,
+    Rounding = 0,
+    Callback = function(v)
+        CFspeed = v
+    end
 })
 
 -- ========================
